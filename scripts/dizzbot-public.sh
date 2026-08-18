@@ -9,16 +9,17 @@ NGINX_CTN=hermes-nginx
 
 need_dns() {
   python3 - <<'PY'
-import socket, sys
+import json, sys, urllib.request
 want = "2.25.140.203"
 ok = True
 for h in ("dizzbot.com", "www.dizzbot.com"):
-    try:
-        ips = sorted({a[4][0] for a in socket.getaddrinfo(h, None, socket.AF_INET)})
-    except Exception as e:
-        print(f"DNS_FAIL {h} {e}")
-        sys.exit(2)
-    print(f"DNS {h} -> {','.join(ips)}")
+    req = urllib.request.Request(
+        f"https://dns.google/resolve?name={h}&type=A",
+        headers={"accept": "application/dns-json"},
+    )
+    d = json.load(urllib.request.urlopen(req, timeout=10))
+    ips = [a.get("data") for a in d.get("Answer", []) if a.get("type") == 1]
+    print(f"DNS {h} -> {','.join(ips) or 'NONE'}")
     if want not in ips:
         ok = False
 sys.exit(0 if ok else 3)
