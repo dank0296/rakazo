@@ -39,22 +39,22 @@ def load_database_url() -> str:
     raise SystemExit("DATABASE_URL missing in RAKAZO_ENV")
 
 
-def sql(query: str, *args: str) -> list[dict]:
+def sql(query: str, *args: str) -> list[list[str]]:
     url = load_database_url()
-    cmd = ["psql", url, "-At", "-F", "\t", "-c", query]
-    # Use dollar-quoting via env substitution — only pass literals we control/escape.
     if args:
-        safe = []
-        for a in args:
-            safe.append(a.replace("'", "''"))
+        safe = [a.replace("'", "''") for a in args]
         query = query.format(*safe)
-        cmd[-1] = query
-    out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+    cmd = ["psql", url, "-At", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", query]
+    try:
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+    except FileNotFoundError:
+        raise RuntimeError("psql not installed") from None
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError((exc.output or str(exc))[-500:]) from None
     rows = []
     for line in out.splitlines():
-        if not line.strip():
-            continue
-        rows.append(line.split("\t"))
+        if line.strip():
+            rows.append(line.split("\t"))
     return rows
 
 
@@ -138,8 +138,9 @@ def allowlist() -> list[str]:
 def set_allowlist(emails: list[str]) -> None:
     joined = ",".join(sorted(set(emails)))
     sql(
-        'UPDATE deployment_settings SET "signupAllowlist" = \'{0}\', '
-        '"updatedAt" = NOW() WHERE id = \'default\'',
+        'INSERT INTO deployment_settings (id, "signupAllowlist", "signupsEnabled", "createdAt", "updatedAt") '
+        "VALUES ('default', '{0}', true, NOW(), NOW()) "
+        'ON CONFLICT (id) DO UPDATE SET "signupAllowlist" = EXCLUDED."signupAllowlist", "updatedAt" = NOW()',
         joined,
     )
 
@@ -218,14 +219,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"ok": False})
         data = json.loads(raw) if raw.startswith("{") else {k: v[0] for k, v in parse_qs(raw).items()}
         if path in ("/allow", "/api/allow"):
-            email = str(data.get("email", "")).strip().lower()
-            op = data.get("op", "add")
-            cur = allowlist()
-            if op == "remove":
-                cur = [e for e in cur if e != email]
-            elif email:
-                cur.append(email)
-            set_allowlist(cur)
+            try:
+                email = str(data.get("email", "")).strip().lower()
+                op = data.get("op", "add")
+                cur = allowlist()
+                if op == "remove":
+                    cur = [e for e in cur if e != email]
+                elif email:
+                    cur.append(email)
+                set_allowlist(cur)
+            except Exception as exc:
+                print("allow-error", exc)
+                return self._html(500, f"allow failed: {exc}")
             if path == "/allow":
                 return self._html(302, "ok", [("Location", "/owner/")])
             return self._json(200, {"ok": True, "allowlist": allowlist()})
