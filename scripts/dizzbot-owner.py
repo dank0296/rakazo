@@ -66,7 +66,6 @@ HTML = """<!doctype html>
   .pill{background:#1f1f2e;padding:4px 8px;border-radius:999px;margin:2px}
 </style>
 <h1>Dizzbot accounts</h1>
-<p class="muted">Not Dank AI. Not billing.kerogroup.ai. Bots are hidden on purpose.</p>
 <form method="post" action="login" class="row" id="login" hidden>
   <input type="password" name="password" placeholder="Owner password" required>
   <button>Unlock</button>
