@@ -1,0 +1,186 @@
+diff --git a/packages/adapters/src/composio-connector.ts b/packages/adapters/src/composio-connector.ts
+@@ -99,6 +99,46 @@
+   return [...new Set(toolkits.map((slug) => slug.trim()).filter(Boolean))].sort().join(",");
+ }
+ 
++export type PluginConnectionRow = {
++  id: string;
++  provider: string;
++  status: string;
++  displayName: string;
++};
++
++export function mergeConnectedPlugins(
++  dbRows: { provider: string; displayName: string }[],
++  liveSlugs: string[],
++): { provider: string; displayName: string }[] {
++  const byProvider = new Map<string, { provider: string; displayName: string }>();
++  for (const row of dbRows) byProvider.set(row.provider, row);
++  for (const slug of liveSlugs) {
++    if (!slug || byProvider.has(slug)) continue;
++    byProvider.set(slug, { provider: slug, displayName: slug });
++  }
++  return [...byProvider.values()];
++}
++
++export function planLiveConnectionSync(
++  rows: PluginConnectionRow[],
++  liveSlugs: string[],
++): { connectIds: string[]; create: { provider: string; displayName: string }[] } {
++  const connectIds: string[] = [];
++  const create: { provider: string; displayName: string }[] = [];
++  for (const slug of liveSlugs) {
++    if (!slug) continue;
++    const matches = rows.filter((row) => row.provider === slug);
++    if (matches.some((row) => row.status === "connected")) continue;
++    const pending = matches.find((row) => row.status === "pending" || row.status === "error");
++    if (pending) {
++      connectIds.push(pending.id);
++      continue;
++    }
++    create.push({ provider: slug, displayName: slug });
++  }
++  return { connectIds, create };
++}
++
+ export class ComposioConnector implements ConnectorProvider, ConnectionAuthProvider {
+   private client: Composio | undefined;
+   private readonly catalogSessions = new Map<string, string>();
+@@ -156,7 +196,7 @@
+   async catalog(userId: string, query?: string): Promise<ComposioCatalogItem[]> {
+     const [directory, connected] = await Promise.all([
+       this.directory(),
+-      this.connectedSlugs(userId),
++      this.listConnectedSlugs(userId),
+     ]);
+     return filterCatalog(mergeCatalogWithConnected(directory, connected), query ?? "");
+   }
+@@ -180,6 +220,10 @@
+     }));
+   }
+ 
++  async listConnectedSlugs(userId: string): Promise<string[]> {
++    return this.connectedSlugs(userId);
++  }
++
+   private async connectedSlugs(userId: string): Promise<string[]> {
+     const session = await this.sessionFor(userId);
+     const connected = await collectPages((cursor) =>
+diff --git a/packages/adapters/src/executor.ts b/packages/adapters/src/executor.ts
+@@ -30,7 +30,11 @@
+ } from "@rakazo/db";
+ import { builtinAgentTools } from "./builtin-tools.js";
+ import { archiveSpawnedBot, spawnBot } from "./child-bots.js";
+-import { collectLogIds } from "./composio-connector.js";
++import {
++  collectLogIds,
++  mergeConnectedPlugins,
++  planLiveConnectionSync,
++} from "./composio-connector.js";
+ import { scheduleComputerSleep } from "./computer-idle.js";
+ import {
+   acquireComputerExecutionLease,
+@@ -91,6 +95,7 @@
+   dataDir?: string;
+   notifications?: NotificationProvider;
+   jobs: JobPublisher;
++  listConnectedPluginSlugs?: (userId: string) => Promise<string[]>;
+ }
+ 
+ export async function deferFutureRoutine(
+@@ -260,7 +265,7 @@
+ 
+       const runSecrets = [...deps.secrets];
+       try {
+-        const [bot, thread, messages, task, connectedPlugins, credential, settings] =
++        const [bot, thread, messages, task, storedConnections, credential, settings] =
+           await Promise.all([
+             deps.prisma.bot.findUniqueOrThrow({
+               where: { id: run.botId },
+@@ -275,8 +280,8 @@
+             }),
+             deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
+             deps.prisma.connection.findMany({
+-              where: { userId: run.userId, workspaceId: run.workspaceId, status: "connected" },
+-              select: { provider: true, displayName: true },
++              where: { userId: run.userId, workspaceId: run.workspaceId },
++              select: { id: true, provider: true, displayName: true, status: true },
+             }),
+             deps.prisma.userModelCredential.findFirst({
+               where: { userId: run.userId, workspaceId: run.workspaceId, isDefault: true },
+@@ -285,6 +290,53 @@
+           ]);
+         runAbortController = new AbortController();
+         if (!leaseValid) runAbortController.abort();
++        let liveSlugs: string[] = [];
++        if (deps.listConnectedPluginSlugs) {
++          try {
++            liveSlugs = await deps.listConnectedPluginSlugs(run.userId);
++          } catch {
++            liveSlugs = [];
++          }
++        }
++        const sync = planLiveConnectionSync(storedConnections, liveSlugs);
++        if (sync.connectIds.length > 0) {
++          await deps.prisma.connection.updateMany({
++            where: { id: { in: sync.connectIds }, userId: run.userId, workspaceId: run.workspaceId },
++            data: { status: "connected" },
++          });
++        }
++        for (const row of sync.create) {
++          const existing = await deps.prisma.connection.findFirst({
++            where: {
++              userId: run.userId,
++              workspaceId: run.workspaceId,
++              provider: row.provider,
++            },
++            select: { id: true, status: true },
++          });
++          if (existing) {
++            if (existing.status !== "connected") {
++              await deps.prisma.connection.update({
++                where: { id: existing.id },
++                data: { status: "connected" },
++              });
++            }
++            continue;
++          }
++          await deps.prisma.connection.create({
++            data: {
++              workspaceId: run.workspaceId,
++              userId: run.userId,
++              provider: row.provider,
++              displayName: row.displayName,
++              status: "connected",
++            },
++          });
++        }
++        const connectedPlugins = mergeConnectedPlugins(
++          storedConnections.filter((row: { status: string }) => row.status === "connected"),
++          liveSlugs,
++        );
+         const context = {
+           operationId: runId,
+           traceId: runId,
+diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+@@ -61,6 +61,9 @@
+     memory: new MarkdownMemoryStore(prisma),
+     home,
+     connector: stack.connector,
++    listConnectedPluginSlugs: stack.composio
++      ? (userId: string) => stack.composio!.listConnectedSlugs(userId)
++      : undefined,
+     secrets: [process.env.OPENROUTER_API_KEY ?? "", process.env.COMPOSIO_API_KEY ?? ""].filter(
+       Boolean,
+     ),
+diff --git a/apps/api/src/app.ts b/apps/api/src/app.ts
+@@ -137,6 +137,9 @@
+     memory,
+     home,
+     connector: stack.connector,
++    listConnectedPluginSlugs: stack.composio
++      ? (userId: string) => stack.composio!.listConnectedSlugs(userId)
++      : undefined,
+     secrets: [env.openRouterKey ?? "", env.composioApiKey ?? ""].filter(Boolean),
+     secretStore: secrets,
+     deploymentModelKey: env.openRouterKey,
