@@ -79,6 +79,9 @@ server {
     ssl_certificate /etc/letsencrypt/live/dizzbot.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/dizzbot.com/privkey.pem;
     client_max_body_size 32m;
+    location = / {
+        return 302 /app/cmswo86840001v6kml961gykb;
+    }
     location / {
         proxy_pass http://127.0.0.1:5173;
         proxy_http_version 1.1;
