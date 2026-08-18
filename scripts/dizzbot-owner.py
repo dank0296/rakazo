@@ -14,9 +14,22 @@ from urllib.parse import parse_qs, urlparse
 
 HOST = os.environ.get("OWNER_BIND", "0.0.0.0")
 PORT = int(os.environ.get("OWNER_PORT", "8788"))
-PASSWORD = os.environ.get("OWNER_PASSWORD", "")
+ENV_FILE = Path(os.environ.get("OWNER_ENV", "/opt/dizzbot-owner.env"))
 RAKAZO_ENV = Path(os.environ.get("RAKAZO_ENV", "/opt/rakazo/.env"))
 COOKIE = "dizzbot_owner"
+
+
+def load_password() -> str:
+    if os.environ.get("OWNER_PASSWORD"):
+        return os.environ["OWNER_PASSWORD"]
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            if line.startswith("OWNER_PASSWORD="):
+                return line.split("=", 1)[1].strip()
+    return ""
+
+
+PASSWORD = load_password()
 
 
 def load_database_url() -> str:
