@@ -67,7 +67,7 @@ HTML = """<!doctype html>
 </style>
 <h1>Dizzbot accounts</h1>
 <p class="muted">Not Dank AI. Not billing.kerogroup.ai. Bots are hidden on purpose.</p>
-<form method="post" action="/login" class="row" id="login" hidden>
+<form method="post" action="login" class="row" id="login" hidden>
   <input type="password" name="password" placeholder="Owner password" required>
   <button>Unlock</button>
 </form>
@@ -75,7 +75,7 @@ HTML = """<!doctype html>
   <h2>Allowlist</h2>
   <p class="muted">Only these emails can register. Empty allowlist = anyone can sign up.</p>
   <div id="allow"></div>
-  <form method="post" action="/allow" class="row">
+  <form method="post" action="allow" class="row">
     <input name="email" type="email" placeholder="payer@email.com" required>
     <button>Allow email</button>
   </form>
@@ -88,10 +88,10 @@ HTML = """<!doctype html>
 </div>
 <script>
 async function boot(){
-  const me = await fetch('/api/me').then(r=>r.json());
+  const me = await fetch('api/me').then(r=>r.json());
   if(!me.ok){ login.hidden=false; return; }
   app.hidden=false;
-  const d = await fetch('/api/state').then(r=>r.json());
+  const d = await fetch('api/state').then(r=>r.json());
   allow.innerHTML = (d.allowlist.length? d.allowlist.map(e=>
     `<span class="pill">${e} <button form="x" onclick="drop('${e}')">x</button></span>`
   ).join(' ') : '<span class="muted">empty — public signup is open</span>');
@@ -101,12 +101,12 @@ async function boot(){
   </tr>`).join('') || '<tr><td colspan="4" class="muted">no accounts</td></tr>';
 }
 async function drop(email){
-  await fetch('/api/allow',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({op:'remove',email})});
+  await fetch('api/allow',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({op:'remove',email})});
   boot();
 }
 async function lock(id){
   if(!confirm('Lock this account? They cannot sign in.')) return;
-  await fetch('/api/lock',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id})});
+  await fetch('api/lock',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id})});
   boot();
 }
 boot();
@@ -165,8 +165,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_GET(self):
+    def _path(self) -> str:
         path = urlparse(self.path).path
+        if path.startswith("/owner"):
+            path = path[len("/owner") :] or "/"
+        return path
+
+    def do_GET(self):
+        path = self._path()
         if path in ("/", "/owner", "/owner/"):
             return self._html(200, HTML)
         if path == "/api/me":
@@ -178,7 +184,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        path = urlparse(self.path).path
+        path = self._path()
         n = int(self.headers.get("Content-Length", "0") or 0)
         raw = self.rfile.read(n).decode() if n else ""
         if path == "/login":
