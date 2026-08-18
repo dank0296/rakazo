@@ -40,20 +40,40 @@ def load_database_url() -> str:
 
 
 def sql(query: str, *args: str) -> list[list[str]]:
-    url = load_database_url()
     if args:
-        safe = [a.replace("'", "''") for a in args]
-        query = query.format(*safe)
-    cmd = ["psql", url, "-At", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", query]
+        query = query.format(*[a.replace("'", "''") for a in args])
+    cmd = [
+        "docker",
+        "compose",
+        "--env-file",
+        "/opt/rakazo/.env",
+        "-f",
+        "/opt/rakazo/infra/compose/docker-compose.yml",
+        "exec",
+        "-T",
+        "postgres",
+        "psql",
+        "-U",
+        "rakazo",
+        "-d",
+        "rakazo",
+        "-At",
+        "-F",
+        "\t",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        query,
+    ]
     try:
-        out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+        out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, cwd="/opt/rakazo")
     except FileNotFoundError:
-        raise RuntimeError("psql not installed") from None
+        raise RuntimeError("docker compose not found") from None
     except subprocess.CalledProcessError as exc:
         raise RuntimeError((exc.output or str(exc))[-500:]) from None
     rows = []
     for line in out.splitlines():
-        if line.strip():
+        if line.strip() and not line.startswith("WARNING"):
             rows.append(line.split("\t"))
     return rows
 
