@@ -1,4 +1,6 @@
 diff --git a/packages/adapters/src/composio-connector.ts b/packages/adapters/src/composio-connector.ts
+--- a/packages/adapters/src/composio-connector.ts
++++ b/packages/adapters/src/composio-connector.ts
 @@ -99,6 +99,46 @@
    return [...new Set(toolkits.map((slug) => slug.trim()).filter(Boolean))].sort().join(",");
  }
@@ -67,6 +69,8 @@ diff --git a/packages/adapters/src/composio-connector.ts b/packages/adapters/src
      const session = await this.sessionFor(userId);
      const connected = await collectPages((cursor) =>
 diff --git a/packages/adapters/src/executor.ts b/packages/adapters/src/executor.ts
+--- a/packages/adapters/src/executor.ts
++++ b/packages/adapters/src/executor.ts
 @@ -30,7 +30,11 @@
  } from "@rakazo/db";
  import { builtinAgentTools } from "./builtin-tools.js";
@@ -163,6 +167,8 @@ diff --git a/packages/adapters/src/executor.ts b/packages/adapters/src/executor.
            operationId: runId,
            traceId: runId,
 diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
+--- a/apps/worker/src/index.ts
++++ b/apps/worker/src/index.ts
 @@ -61,6 +61,9 @@
      memory: new MarkdownMemoryStore(prisma),
      home,
@@ -174,6 +180,8 @@ diff --git a/apps/worker/src/index.ts b/apps/worker/src/index.ts
        Boolean,
      ),
 diff --git a/apps/api/src/app.ts b/apps/api/src/app.ts
+--- a/apps/api/src/app.ts
++++ b/apps/api/src/app.ts
 @@ -137,6 +137,9 @@
      memory,
      home,
